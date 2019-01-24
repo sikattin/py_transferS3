@@ -201,7 +201,14 @@ if __name__ == '__main__':
 
     ###### send mail ######
     try:
-        send_mail(bucket, archive_name, key_name, to_addr, cc_addr, smtp_server=smtp_server, subject=SUBJECT_SUCCESS)
+        send_mail(bucket,
+                  archive_name,
+                  key_name,
+                  to_addr,
+                  cc_addr,
+                  smtp_server=smtp_server,
+                  subject=SUBJECT_SUCCESS,
+                  filesize=filesize)
     except Exception as e:
         logger.exception('Failed to send a mail. {0}'.format(str(e)))
     else:

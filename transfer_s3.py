@@ -21,8 +21,8 @@ ARCHIVE_MODE = 'w:gz'
 SMTP_SERVER = '59.128.93.227'
 MULTIPART_THRESHOLD = 8 * 1024 * 1024
 
-SUBJECT_SUCCESS = '[SUCCESS] {} DB Backup notification'.format(time.strftime('%Y/%m/%d'))
-SUBJECT_FAILED = '[FAILED] {} DB Backup notification'.format(time.strftime('%Y/%m/%d'))
+SUBJECT_SUCCESS = '[SUCCESS] {} Transfer backup notification'.format(time.strftime('%Y/%m/%d'))
+SUBJECT_FAILED = '[FAILED] {} Transfer backup notification'.format(time.strftime('%Y/%m/%d'))
 
 
 if __name__ == '__main__':
@@ -30,16 +30,39 @@ if __name__ == '__main__':
     def send_mail(bucket: str,
                   src_path: str,
                   key_name: str,
+                  from_addr: str,
                   to_addr: str,
                   cc_addr: str,
                   smtp_server=None,
+                  ses_access=None,
+                  ses_secret=None,
                   subject=None,
-                  filesize=0):
+                  filesize=0,
+                  is_ses_auth=False):
+        """[summary]
+        
+        Args:
+            bucket (str): [description]
+            src_path (str): [description]
+            key_name (str): [description]
+            from_addr (str): [description]
+            to_addr (str): [description]
+            cc_addr (str): [description]
+            smtp_server ([type], optional): [description]. Defaults to None.
+            ses_access ([type], optional): [description]. Defaults to None.
+            ses_secret ([type], optional): [description]. Defaults to None.
+            subject ([type], optional): [description]. Defaults to None.
+            filesize (int, optional): [description]. Defaults to 0.
+            is_ses_auth (bool, optional): [description]. Defaults to False.
+        """
         if subject is None:
             subject = '{} DB Backup notification'.format(time.strftime('%Y/%m/%d'))
         if smtp_server is None:
             smtp_server = SMTP_SERVER
-        from_addr = '{0}@local'.format(gethostname())
+        if ses_access is not None and ses_secret is not None:
+            if ses_access != "" and ses_secret != "":
+                ses_auth = (ses_access, ses_secret)
+                is_ses_auth = True
         body = 'Amazon S3 uploading notification.\n' \
                'Bucket: {0}\n' \
                'SourceFilePath: {1}\n' \
@@ -54,12 +77,33 @@ if __name__ == '__main__':
         mail['From'] = from_addr
         mail['Subject'] = subject
 
-        server = smtplib.SMTP(smtp_server)
+        server = smtplib.SMTP(smtp_server, 587)
         try:
             server.ehlo()
+            if is_ses_auth:
+                server.starttls()
+                server.login(*ses_auth)
             server.sendmail(from_addr, [[to_addr], [cc_addr]], mail.as_string())
         finally:
             server.quit()
+
+    # default config
+    cfg = {
+        "GENERAL": {
+            "ses_access": "",
+            "ses_secret": ""
+        },
+        "Logging": {
+            "log_path": "/var/log/s3transfer.log",
+            "log_rolloversize": 104857600
+        },
+        "Mail": {
+            "smtp_server": "ELB-nxj-mail-relay-internal-664ce954179ae5ac.elb.ap-northeast-1.amazonaws.com",
+            "from_address": "notifi.tech.tos@nexon.co.jp",
+            "to_address": "notifi.tech.tos@nexon.co.jp",
+            "cc_address": "notifi.tech.tos@nexon.co.jp"
+        }
+    }
 
     description = 'Transfer a specified file/dir to amazon S3.'
     argparser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -106,9 +150,12 @@ if __name__ == '__main__':
     ###### Parse config file. ######
     config = configparser.ConfigParser()
     config.read(args.config)
-    conf_general = config['GENERAL']
-    conf_logging = config['Logging']
-    conf_mail = config['Mail']
+    ###### Set config values ######
+    for k, v in config.items():
+        if k == 'DEFAULT':
+            continue
+        for key, value in v.items():
+            cfg[k][key] = value
 
     ###### Set variables ######
     # s3 bucket name
@@ -117,19 +164,29 @@ if __name__ == '__main__':
     src_path = r"{0}".format(args.src_path)
     # section name in /~/.aws/credentials
     aws_cred_secname = args.aws_cred_secname
-    # key name of s3 object 
+    # key name of s3 object
     key_name = args.key_name
     # flag whether compress source file
     is_nocomp = args.no_compress
+    # general settings
+    ses_access = cfg['GENERAL']['ses_access']
+    ses_secret = cfg['GENERAL']['ses_secret']
     # Logging settings
     loglevel = args.loglevel
     handler = args.handler
-    logpath = conf_logging['log_path']
-    log_rolloversize = int(conf_logging['log_rolloversize'])
+    logpath = cfg['Logging']['log_path']
+    log_rolloversize = int(cfg['Logging']['log_rolloversize'])
     # Mail settings
-    smtp_server = conf_mail['smtp_server']
-    to_addr = conf_mail['to_address']
-    cc_addr = conf_mail['cc_address']
+    smtp_server = cfg['Mail']['smtp_server']
+    from_addr = cfg['Mail']['from_address']
+    to_addr = cfg['Mail']['to_address']
+    cc_addr = cfg['Mail']['cc_address']
+    arg_mail = (from_addr, to_addr, cc_addr)
+    kwarg_ses = {
+        "smtp_server": smtp_server,
+        "ses_access": ses_access,
+        "ses_secret": ses_secret
+    }
     # config file path
     conf_path = args.config
     filesize = 0
@@ -159,7 +216,7 @@ if __name__ == '__main__':
     except BotoCoreError as e:
         logger.exception('raised unexpected error while initializing s3 uploader client.')
         logger.error(e)
-        send_mail(bucket, src_path, key_name, to_addr, cc_addr, smtp_server=smtp_server, subject=SUBJECT_FAILED)
+        send_mail(bucket, src_path, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
         raise e
 
     ###### archiving tar file ######
@@ -172,11 +229,11 @@ if __name__ == '__main__':
                 tar.add(src_path)
         except FileNotFoundError as notfound_e:
             logger.error('{0} not found.'.format(src_path))
-            send_mail(bucket, src_path, key_name, to_addr, cc_addr, smtp_server=smtp_server, subject=SUBJECT_FAILED)
+            send_mail(bucket, src_path, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
             raise notfound_e
         except tarfile.TarError as tar_e:
             logger.error('raised unexpected error {0}'.format(tar_e))
-            send_mail(bucket, src_path, key_name, to_addr, cc_addr, smtp_server=smtp_server, subject=SUBJECT_FAILED)
+            send_mail(bucket, src_path, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
             raise tar_e
         else:
             logger.info('created archive file {0}'.format(archive_name))
@@ -190,7 +247,7 @@ if __name__ == '__main__':
     except BotoCoreError as e:
         logger.error('raised unexpected error while uploading process.')
         logger.error(e)
-        send_mail(bucket, archive_name, key_name, to_addr, cc_addr, smtp_server=smtp_server, subject=SUBJECT_FAILED, filesize=filesize)
+        send_mail(bucket, archive_name, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
         raise e
     else:
         logger.info('complete uploading {0} to {1}'.format(archive_name, bucket))
@@ -201,14 +258,7 @@ if __name__ == '__main__':
 
     ###### send mail ######
     try:
-        send_mail(bucket,
-                  archive_name,
-                  key_name,
-                  to_addr,
-                  cc_addr,
-                  smtp_server=smtp_server,
-                  subject=SUBJECT_SUCCESS,
-                  filesize=filesize)
+        send_mail(bucket, archive_name, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_SUCCESS, filesize=filesize)
     except Exception as e:
         logger.exception('Failed to send a mail. {0}'.format(str(e)))
     else:

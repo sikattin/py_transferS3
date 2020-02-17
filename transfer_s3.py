@@ -18,7 +18,8 @@ from email.mime.text import MIMEText
 
 CONF_FILE = 'transfer_s3.ini'
 ARCHIVE_MODE = 'w:gz'
-SMTP_SERVER = '59.128.93.227'
+SMTP_SERVER = 'smtpserver address'
+SMTP_PORT = 25
 MULTIPART_THRESHOLD = 8 * 1024 * 1024
 
 SUBJECT_SUCCESS = '[SUCCESS] {} Transfer backup notification'.format(time.strftime('%Y/%m/%d'))
@@ -77,7 +78,7 @@ if __name__ == '__main__':
         mail['From'] = from_addr
         mail['Subject'] = subject
 
-        server = smtplib.SMTP(smtp_server, 587)
+        server = smtplib.SMTP(smtp_server, SMTP_PORT)
         try:
             server.ehlo()
             if is_ses_auth:
@@ -98,10 +99,10 @@ if __name__ == '__main__':
             "log_rolloversize": 104857600
         },
         "Mail": {
-            "smtp_server": "ELB-nxj-mail-relay-internal-664ce954179ae5ac.elb.ap-northeast-1.amazonaws.com",
-            "from_address": "notifi.tech.tos@nexon.co.jp",
-            "to_address": "notifi.tech.tos@nexon.co.jp",
-            "cc_address": "notifi.tech.tos@nexon.co.jp"
+            "smtp_server": "xxx.xxx.xxx.xxx",
+            "from_address": "from@domain.co.jp",
+            "to_address": "to@domain.co.jp",
+            "cc_address": "cc@domain.co.jp"
         }
     }
 
@@ -155,7 +156,10 @@ if __name__ == '__main__':
         if k == 'DEFAULT':
             continue
         for key, value in v.items():
-            cfg[k][key] = value
+            try:
+                cfg[k][key] = value
+            except KeyError:
+                continue
 
     ###### Set variables ######
     # s3 bucket name
@@ -197,7 +201,7 @@ if __name__ == '__main__':
     if handler == 'file':
         flogger_fac = FileLoggerFactory(logger_name=__name__,
                                         loglevel=loglevel)
-        logger = flogger_fac.create(file=logpath)
+        logger = flogger_fac.create(filename=logpath)
     elif handler == 'console':
         stdlogger_fac = StdoutLoggerFactory(logger_name=__name__,
                                             loglevel=loglevel)
@@ -205,7 +209,7 @@ if __name__ == '__main__':
     elif handler == 'rotation':
         rlogger_fac = RotationLoggerFactory(logger_name=__name__,
                                             loglevel=loglevel)
-        logger = rlogger_fac.create(file=logpath,
+        logger = rlogger_fac.create(filename=logpath,
                                     max_bytes=log_rolloversize,
                                     bcount=10)
 
@@ -242,8 +246,10 @@ if __name__ == '__main__':
     ###### upload tar file to s3 bucket. ######
     logger.info('Start uploading {0} to amazon s3. ' \
                 'uploading status is logging to /var/log/S3Operation.log'.format(archive_name))
+
+    metadata = {'src_size': '%s' % (filesize)}
     try:
-        client.upload(archive_name, key_name=key_name)
+        client.upload(archive_name, key_name=key_name, Metadata=metadata)
     except BotoCoreError as e:
         logger.error('raised unexpected error while uploading process.')
         logger.error(e)

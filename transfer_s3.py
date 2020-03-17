@@ -146,6 +146,8 @@ if __name__ == '__main__':
                            default=CONF_FILE,
                            help='config file path. loading config in current directory by default'
                            )
+    argparser.add_argument('--sendmail', action='store_true', required=False,
+                           help='Sending a mail about the result.')
     args = argparser.parse_args()
 
     ###### Parse config file. ######
@@ -172,6 +174,7 @@ if __name__ == '__main__':
     key_name = args.key_name
     # flag whether compress source file
     is_nocomp = args.no_compress
+    is_sendmail = args.sendmail
     # general settings
     ses_access = cfg['GENERAL']['ses_access']
     ses_secret = cfg['GENERAL']['ses_secret']
@@ -201,7 +204,7 @@ if __name__ == '__main__':
     if handler == 'file':
         flogger_fac = FileLoggerFactory(logger_name=__name__,
                                         loglevel=loglevel)
-        logger = flogger_fac.create(filename=logpath)
+        logger = flogger_fac.create(logpath)
     elif handler == 'console':
         stdlogger_fac = StdoutLoggerFactory(logger_name=__name__,
                                             loglevel=loglevel)
@@ -209,7 +212,7 @@ if __name__ == '__main__':
     elif handler == 'rotation':
         rlogger_fac = RotationLoggerFactory(logger_name=__name__,
                                             loglevel=loglevel)
-        logger = rlogger_fac.create(filename=logpath,
+        logger = rlogger_fac.create(logpath,
                                     max_bytes=log_rolloversize,
                                     bcount=10)
 
@@ -220,7 +223,8 @@ if __name__ == '__main__':
     except BotoCoreError as e:
         logger.exception('raised unexpected error while initializing s3 uploader client.')
         logger.error(e)
-        send_mail(bucket, src_path, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
+        if is_sendmail:
+            send_mail(bucket, src_path, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
         raise e
 
     ###### archiving tar file ######
@@ -233,11 +237,13 @@ if __name__ == '__main__':
                 tar.add(src_path)
         except FileNotFoundError as notfound_e:
             logger.error('{0} not found.'.format(src_path))
-            send_mail(bucket, src_path, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
+            if is_sendmail:
+                send_mail(bucket, src_path, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
             raise notfound_e
         except tarfile.TarError as tar_e:
             logger.error('raised unexpected error {0}'.format(tar_e))
-            send_mail(bucket, src_path, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
+            if is_sendmail:
+                send_mail(bucket, src_path, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
             raise tar_e
         else:
             logger.info('created archive file {0}'.format(archive_name))
@@ -253,7 +259,8 @@ if __name__ == '__main__':
     except BotoCoreError as e:
         logger.error('raised unexpected error while uploading process.')
         logger.error(e)
-        send_mail(bucket, archive_name, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
+        if is_sendmail:
+            send_mail(bucket, archive_name, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_FAILED, filesize=filesize)
         raise e
     else:
         logger.info('complete uploading {0} to {1}'.format(archive_name, bucket))
@@ -264,9 +271,8 @@ if __name__ == '__main__':
 
     ###### send mail ######
     try:
-        send_mail(bucket, archive_name, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_SUCCESS, filesize=filesize)
+        if is_sendmail:
+            send_mail(bucket, archive_name, key_name, *arg_mail, **kwarg_ses, subject=SUBJECT_SUCCESS, filesize=filesize)
     except Exception as e:
         logger.exception('Failed to send a mail. {0}'.format(str(e)))
-    else:
-        logger.info("Send a mail to {0}".format(to_addr))
 
